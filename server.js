@@ -5,16 +5,40 @@ const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
+const mongoose = require('mongoose');
+require('dotenv').config();
+
+// Connect to MongoDB
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/fusionai', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => console.log('Connected to MongoDB'))
+.catch(err => console.error('MongoDB connection error:', err));
+
+// User Schema
+const userSchema = new mongoose.Schema({
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const User = mongoose.model('User', userSchema);
+
+// Reset Code Schema
+const resetCodeSchema = new mongoose.Schema({
+  email: { type: String, required: true },
+  code: { type: String, required: true },
+  expires: { type: Date, required: true }
+});
+
+const ResetCode = mongoose.model('ResetCode', resetCodeSchema);
 
 const app = express();
 const port = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(bodyParser.json());
-
-// In-memory user store (for demo only)
-const users = {};
-const resetCodes = {};
 
 // Secret key for JWT (in production, use env variable)
 const JWT_SECRET = 'supersecretkey';
@@ -40,12 +64,16 @@ app.post('/api/register', async (req, res) => {
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password required' });
   }
-  if (users[email]) {
-    return res.status(400).json({ error: 'User already exists' });
-  }
   try {
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
-    users[email] = { password: hashedPassword };
+    const newUser = new User({ email, password: hashedPassword });
+    await newUser.save();
     res.json({ message: 'Account created successfully' });
   } catch (error) {
     console.error('Registration error:', error);
@@ -58,51 +86,83 @@ app.post('/api/register', async (req, res) => {
 // Forgot password
 app.post('/api/forgot-password', async (req, res) => {
   const { email } = req.body;
-  if (!users[email]) {
-    return res.status(400).json({ error: 'User not found' });
-  }
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  resetCodes[email] = { code, expires: Date.now() + 10 * 60 * 1000 };
   try {
-    await transporter.sendMail({
-      from: 'noreply@fusionai.com',
-      to: email,
-      subject: 'Reset your FusionAI password',
-      text: `Your reset code is: ${code}. It expires in 10 minutes.`
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ error: 'User not found' });
+    }
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const resetCode = new ResetCode({
+      email,
+      code,
+      expires: new Date(Date.now() + 10 * 60 * 1000)
     });
-    res.json({ message: 'Reset code sent to your email' });
+    await resetCode.save();
+    try {
+      await transporter.sendMail({
+        from: 'noreply@fusionai.com',
+        to: email,
+        subject: 'Reset your FusionAI password',
+        text: `Your reset code is: ${code}. It expires in 10 minutes.`
+      });
+      res.json({ message: 'Reset code sent to your email' });
+    } catch (emailError) {
+      console.error('Email send error:', emailError);
+      // Clean up the reset code if email fails
+      await ResetCode.deleteOne({ email, code });
+      res.status(500).json({ error: 'Failed to send reset email' });
+    }
   } catch (error) {
-    console.error('Email send error:', error);
-    res.status(500).json({ error: 'Failed to send reset email' });
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: 'Failed to process request' });
   }
 });
 
 // Reset password
 app.post('/api/reset-password', async (req, res) => {
   const { email, code, newPassword } = req.body;
-  const data = resetCodes[email];
-  if (!data || data.code !== code || Date.now() > data.expires) {
-    return res.status(400).json({ error: 'Invalid or expired code' });
+  try {
+    const resetCode = await ResetCode.findOne({
+      email,
+      code,
+      expires: { $gt: new Date() }
+    });
+
+    if (!resetCode) {
+      return res.status(400).json({ error: 'Invalid or expired code' });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await User.findOneAndUpdate({ email }, { password: hashedPassword });
+
+    // Clean up the used reset code
+    await ResetCode.deleteOne({ _id: resetCode._id });
+
+    res.json({ message: 'Password reset successfully' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ error: 'Failed to reset password' });
   }
-  const hashedPassword = await bcrypt.hash(newPassword, 10);
-  users[email].password = hashedPassword;
-  delete resetCodes[email];
-  res.json({ message: 'Password reset successfully' });
 });
 
 // Login endpoint
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
-  const user = users[email];
-  if (!user) {
-    return res.status(400).json({ error: 'Invalid email or password' });
+  try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid email or password' });
+    }
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+      return res.status(400).json({ error: 'Invalid email or password' });
+    }
+    const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' });
+    res.json({ token });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Login failed' });
   }
-  const match = await bcrypt.compare(password, user.password);
-  if (!match) {
-    return res.status(400).json({ error: 'Invalid email or password' });
-  }
-  const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' });
-  res.json({ token });
 });
 
 // Middleware to verify JWT
