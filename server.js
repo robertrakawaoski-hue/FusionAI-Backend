@@ -14,7 +14,6 @@ app.use(bodyParser.json());
 
 // In-memory user store (for demo only)
 const users = {};
-const verificationCodes = {};
 const resetCodes = {};
 
 // Secret key for JWT (in production, use env variable)
@@ -35,7 +34,7 @@ const transporter = nodemailer.createTransporter({
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-// Register endpoint (sends verification code)
+// Register endpoint (direct registration without verification)
 app.post('/api/register', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -44,34 +43,17 @@ app.post('/api/register', async (req, res) => {
   if (users[email]) {
     return res.status(400).json({ error: 'User already exists' });
   }
-  const code = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit code
-  verificationCodes[email] = { code, password, expires: Date.now() + 10 * 60 * 1000 }; // 10 min expiry
   try {
-    await transporter.sendMail({
-      from: 'noreply@fusionai.com',
-      to: email,
-      subject: 'Verify your FusionAI account',
-      text: `Your verification code is: ${code}. It expires in 10 minutes.`
-    });
-    res.json({ message: 'Verification code sent to your email' });
+    const hashedPassword = await bcrypt.hash(password, 10);
+    users[email] = { password: hashedPassword };
+    res.json({ message: 'Account created successfully' });
   } catch (error) {
-    console.error('Email send error:', error);
-    res.status(500).json({ error: 'Failed to send verification email' });
+    console.error('Registration error:', error);
+    res.status(500).json({ error: 'Failed to create account' });
   }
 });
 
-// Verify registration
-app.post('/api/verify', async (req, res) => {
-  const { email, code } = req.body;
-  const data = verificationCodes[email];
-  if (!data || data.code !== code || Date.now() > data.expires) {
-    return res.status(400).json({ error: 'Invalid or expired code' });
-  }
-  const hashedPassword = await bcrypt.hash(data.password, 10);
-  users[email] = { password: hashedPassword };
-  delete verificationCodes[email];
-  res.json({ message: 'Account verified successfully' });
-});
+
 
 // Forgot password
 app.post('/api/forgot-password', async (req, res) => {
