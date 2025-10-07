@@ -20,13 +20,14 @@ const resetCodes = {};
 // Secret key for JWT (in production, use env variable)
 const JWT_SECRET = 'supersecretkey';
 
-// Email transporter (use environment variables for real setup)
+// Email transporter (SendGrid SMTP)
 const transporter = nodemailer.createTransporter({
-  host: 'smtp.ethereal.email',
-  port: 587,
+  host: process.env.SMTP_HOST || 'smtp.sendgrid.net',
+  port: process.env.SMTP_PORT || 587,
+  secure: process.env.SMTP_SECURE === 'true', // false for TLS
   auth: {
-    user: process.env.ETHEREAL_USER || 'your-ethereal-user',
-    pass: process.env.ETHEREAL_PASS || 'your-ethereal-pass'
+    user: process.env.SMTP_USER || 'apikey',
+    pass: process.env.SMTP_PASS || 'your-sendgrid-api-key'
   }
 });
 

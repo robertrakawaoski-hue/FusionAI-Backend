@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -19,14 +21,18 @@ const resetCodes = {};
 // Secret key for JWT (in production, use env variable)
 const JWT_SECRET = 'supersecretkey';
 
-// Email transporter setup
+// Email transporter setup - Configure with real SMTP service
 const transporter = nodemailer.createTransporter({
-  host: process.env.SMTP_HOST || 'smtp.ethereal.email',
+  host: process.env.SMTP_HOST || 'smtp.gmail.com', // Use Gmail SMTP
   port: parseInt(process.env.SMTP_PORT) || 587,
-  secure: process.env.SMTP_SECURE === 'true' || false,
+  secure: process.env.SMTP_SECURE === 'true' || false, // false for 587, true for 465
   auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
+    user: process.env.SMTP_USER, // Your Gmail address
+    pass: process.env.SMTP_PASS   // Your Gmail app password (not regular password)
+  },
+  // Additional Gmail-specific settings
+  tls: {
+    rejectUnauthorized: false
   }
 });
 
