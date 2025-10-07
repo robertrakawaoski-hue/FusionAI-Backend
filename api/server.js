@@ -19,19 +19,16 @@ const resetCodes = {};
 // Secret key for JWT (in production, use env variable)
 const JWT_SECRET = 'supersecretkey';
 
-// Email transporter setup (using Ethereal for demo)
-let transporter;
-(async () => {
-  const testAccount = await nodemailer.createTestAccount();
-  transporter = nodemailer.createTransporter({
-    host: 'smtp.ethereal.email',
-    port: 587,
-    auth: {
-      user: testAccount.user,
-      pass: testAccount.pass
-    }
-  });
-})();
+// Email transporter setup
+const transporter = nodemailer.createTransporter({
+  host: process.env.SMTP_HOST || 'smtp.ethereal.email',
+  port: parseInt(process.env.SMTP_PORT) || 587,
+  secure: process.env.SMTP_SECURE === 'true' || false,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS
+  }
+});
 
 // Multer setup for file uploads
 const storage = multer.memoryStorage();
