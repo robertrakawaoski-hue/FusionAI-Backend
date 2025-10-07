@@ -4,24 +4,37 @@ const bodyParser = require('body-parser');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const nodemailer = require('nodemailer');
 
 const app = express();
-const port = 4000;
+const port = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(bodyParser.json());
 
 // In-memory user store (for demo only)
 const users = {};
+const verificationCodes = {};
+const resetCodes = {};
 
 // Secret key for JWT (in production, use env variable)
 const JWT_SECRET = 'supersecretkey';
+
+// Email transporter (use environment variables for real setup)
+const transporter = nodemailer.createTransporter({
+  host: 'smtp.ethereal.email',
+  port: 587,
+  auth: {
+    user: process.env.ETHEREAL_USER || 'your-ethereal-user',
+    pass: process.env.ETHEREAL_PASS || 'your-ethereal-pass'
+  }
+});
 
 // Multer setup for file uploads
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-// Register endpoint
+// Register endpoint (sends verification code)
 app.post('/api/register', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -30,9 +43,68 @@ app.post('/api/register', async (req, res) => {
   if (users[email]) {
     return res.status(400).json({ error: 'User already exists' });
   }
-  const hashedPassword = await bcrypt.hash(password, 10);
+  const code = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit code
+  verificationCodes[email] = { code, password, expires: Date.now() + 10 * 60 * 1000 }; // 10 min expiry
+  try {
+    await transporter.sendMail({
+      from: 'noreply@fusionai.com',
+      to: email,
+      subject: 'Verify your FusionAI account',
+      text: `Your verification code is: ${code}. It expires in 10 minutes.`
+    });
+    res.json({ message: 'Verification code sent to your email' });
+  } catch (error) {
+    console.error('Email send error:', error);
+    res.status(500).json({ error: 'Failed to send verification email' });
+  }
+});
+
+// Verify registration
+app.post('/api/verify', async (req, res) => {
+  const { email, code } = req.body;
+  const data = verificationCodes[email];
+  if (!data || data.code !== code || Date.now() > data.expires) {
+    return res.status(400).json({ error: 'Invalid or expired code' });
+  }
+  const hashedPassword = await bcrypt.hash(data.password, 10);
   users[email] = { password: hashedPassword };
-  res.json({ message: 'User registered successfully' });
+  delete verificationCodes[email];
+  res.json({ message: 'Account verified successfully' });
+});
+
+// Forgot password
+app.post('/api/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  if (!users[email]) {
+    return res.status(400).json({ error: 'User not found' });
+  }
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  resetCodes[email] = { code, expires: Date.now() + 10 * 60 * 1000 };
+  try {
+    await transporter.sendMail({
+      from: 'noreply@fusionai.com',
+      to: email,
+      subject: 'Reset your FusionAI password',
+      text: `Your reset code is: ${code}. It expires in 10 minutes.`
+    });
+    res.json({ message: 'Reset code sent to your email' });
+  } catch (error) {
+    console.error('Email send error:', error);
+    res.status(500).json({ error: 'Failed to send reset email' });
+  }
+});
+
+// Reset password
+app.post('/api/reset-password', async (req, res) => {
+  const { email, code, newPassword } = req.body;
+  const data = resetCodes[email];
+  if (!data || data.code !== code || Date.now() > data.expires) {
+    return res.status(400).json({ error: 'Invalid or expired code' });
+  }
+  const hashedPassword = await bcrypt.hash(newPassword, 10);
+  users[email].password = hashedPassword;
+  delete resetCodes[email];
+  res.json({ message: 'Password reset successfully' });
 });
 
 // Login endpoint
